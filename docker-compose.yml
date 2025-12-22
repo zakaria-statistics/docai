@@ -1,0 +1,120 @@
+version: '3.8'
+
+services:
+  # Ollama LLM Server (DISABLED - Using host Ollama)
+  # Uncomment if you want to run Ollama in Docker instead of using host
+  # ollama:
+  #   image: ollama/ollama:latest
+  #   container_name: docai-ollama
+  #   ports:
+  #     - "11434:11434"
+  #   volumes:
+  #     - ollama_data:/root/.ollama
+  #   networks:
+  #     - docai-network
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 5
+  #   restart: unless-stopped
+
+  # ChromaDB Vector Database Server
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: docai-chromadb
+    ports:
+      - "8000:8000"
+    volumes:
+      - chroma_data:/chroma/chroma
+    environment:
+      - IS_PERSISTENT=TRUE
+      - ANONYMIZED_TELEMETRY=FALSE
+    networks:
+      - docai-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+
+  # DocAI CLI Application (for interactive use)
+  docai:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: docai-app
+    depends_on:
+      chromadb:
+        condition: service_healthy
+    volumes:
+      - ./data/documents:/app/data/documents
+      - ./data/sessions:/app/data/sessions
+      - ./test_docs:/app/test_docs:ro
+    environment:
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      - OLLAMA_CHAT_MODEL=llama3.1:8b
+      - OLLAMA_EMBEDDING_MODEL=nomic-embed-text
+      - CHROMA_HOST=chromadb
+      - CHROMA_PORT=8000
+      - VECTOR_STORE_PATH=/app/data/vector_db
+      - CHUNK_SIZE=800
+      - CHUNK_OVERLAP=150
+      - RETRIEVAL_TOP_K=5
+    networks:
+      - docai-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
+    profiles:
+      - cli  # Only start with: docker-compose --profile cli up
+
+  # DocAI API Server (HTTP REST API)
+  docai-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: docai-api
+    depends_on:
+      chromadb:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data/documents:/app/data/documents
+      - ./data/sessions:/app/data/sessions
+      - ./test_docs:/app/test_docs:ro
+    environment:
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      - OLLAMA_CHAT_MODEL=llama3.1:8b
+      - OLLAMA_EMBEDDING_MODEL=nomic-embed-text
+      - CHROMA_HOST=chromadb
+      - CHROMA_PORT=8000
+      - VECTOR_STORE_PATH=/app/data/vector_db
+      - CHUNK_SIZE=800
+      - CHUNK_OVERLAP=150
+      - RETRIEVAL_TOP_K=5
+    networks:
+      - docai-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: ["uvicorn", "src.api:app", "--host", "0.0.0.0", "--port", "8080"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+
+networks:
+  docai-network:
+    driver: bridge
+
+volumes:
+  # ollama_data:  # Not needed - using host Ollama
+  #   driver: local
+  chroma_data:
+    driver: local
