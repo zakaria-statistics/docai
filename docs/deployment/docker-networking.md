@@ -711,3 +711,416 @@ docker exec docai-api curl http://172.17.0.1:11434/api/tags
 - Docker networking provides DNS-based service discovery and network isolation
 - Containers can access host services via `host.docker.internal` or bridge gateway IP
 - Currently using host Ollama to avoid port conflicts and save downloads
+
+---
+
+## DocAI System Components & Architecture
+
+### Component Overview
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Host Machine (k8s01 - Linux)                               │
+│                                                             │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │  Ollama Service (Native Process)                     │   │
+│  │  - Port: 11434                                       │   │
+│  │  - Models: llama3.1:8b, nomic-embed-text             │   │
+│  │  - Accessible at: 172.26.0.1 (from containers)      │   │
+│  └─────────────────────────────────────────────────────┘   │
+│                                                             │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │  Docker Network: docai-network (172.26.0.0/16)      │   │
+│  │                                                      │   │
+│  │  ┌──────────────────────────────────────────────┐   │   │
+│  │  │  chromadb (Container)                        │   │   │
+│  │  │  - Image: chromadb/chroma:0.5.23             │   │   │
+│  │  │  - Internal: chromadb:8000                   │   │   │
+│  │  │  - External: localhost:8000                  │   │   │
+│  │  │  - Role: Vector database storage             │   │   │
+│  │  │  - Data: /data (persistent volume)           │   │   │
+│  │  └──────────────────────────────────────────────┘   │   │
+│  │                                                      │   │
+│  │  ┌──────────────────────────────────────────────┐   │   │
+│  │  │  docai-api (Container)                       │   │   │
+│  │  │  - Image: llm-dir-docai-api                  │   │   │
+│  │  │  - Internal: docai-api:8080                  │   │   │
+│  │  │  - External: localhost:8080                  │   │   │
+│  │  │  - Role: REST API server                     │   │   │
+│  │  │  - Entrypoint: uvicorn                       │   │   │
+│  │  │  - Connects to: chromadb + ollama            │   │   │
+│  │  └──────────────────────────────────────────────┘   │   │
+│  │                                                      │   │
+│  │  ┌──────────────────────────────────────────────┐   │   │
+│  │  │  docai (Container - Ephemeral)               │   │   │
+│  │  │  - Image: llm-dir-docai                      │   │   │
+│  │  │  - Profile: cli (manual start)               │   │   │
+│  │  │  - Role: Interactive CLI                     │   │   │
+│  │  │  - Entrypoint: python -m src.main            │   │   │
+│  │  │  - Connects to: chromadb + ollama            │   │   │
+│  │  │  - Removed after use (--rm flag)             │   │   │
+│  │  └──────────────────────────────────────────────┘   │   │
+│  └─────────────────────────────────────────────────────┘   │
+│                                                             │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │  Persistent Storage (Host Volumes)                  │   │
+│  │  - ./data/documents   → Document files              │   │
+│  │  - ./data/sessions    → Chat history                │   │
+│  │  - ./data/vector_db   → Local embeddings cache      │   │
+│  │  - ./test_docs        → Test documents (read-only)  │   │
+│  │                                                      │   │
+│  │  Docker Volumes:                                     │   │
+│  │  - chroma_data        → ChromaDB persistent data    │   │
+│  └─────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Component Responsibilities
+
+#### 1. Ollama (Host Process)
+**Location**: Runs natively on host machine, not in container
+**Why on host**:
+- Already installed and configured
+- Models already downloaded (~5GB for llama3.1:8b)
+- Can utilize GPU if available
+- No port conflicts (11434 already in use)
+
+**Access from containers**: `http://172.26.0.1:11434`
+**Access from host**: `http://localhost:11434`
+
+**Responsibilities**:
+- Generate text completions (LLM inference)
+- Create embeddings for documents and queries
+- Heavy compute workload
+
+#### 2. ChromaDB (Container)
+**Location**: Docker container in docai-network
+**Image**: `chromadb/chroma:0.5.23`
+**Why containerized**:
+- Isolated environment
+- Reproducible deployment
+- Version control
+- Easy backup/restore
+
+**Endpoints**:
+- Internal: `http://chromadb:8000` (from containers)
+- External: `http://localhost:8000` (from host)
+
+**Responsibilities**:
+- Store vector embeddings
+- Perform similarity search
+- Return relevant document chunks
+- Manage collections and tenants
+
+**Data persistence**: Docker volume `chroma_data` → `/data` in container
+
+#### 3. docai-api (Container)
+**Location**: Docker container in docai-network
+**Image**: Built from `Dockerfile`
+**Why containerized**:
+- Portable across environments
+- Easy scaling (multiple instances)
+- Dependency isolation
+- Production-ready
+
+**Endpoints**:
+- Internal: `http://docai-api:8080` (from containers)
+- External: `http://localhost:8080` (from host/internet)
+
+**Responsibilities**:
+- Expose REST API endpoints
+- Process document uploads
+- Handle queries and summarization requests
+- Orchestrate between ChromaDB and Ollama
+- Serve health checks
+
+**API Examples**:
+```bash
+# Health check
+curl http://localhost:8080/health
+
+# Upload document
+curl -X POST http://localhost:8080/api/upload \
+  -F "file=@document.pdf"
+
+# Query documents
+curl -X POST http://localhost:8080/api/query \
+  -H "Content-Type: application/json" \
+  -d '{"query": "What are the main findings?"}'
+```
+
+#### 4. docai CLI (Container)
+**Location**: Docker container (ephemeral)
+**Image**: Same Dockerfile as API
+**Why containerized**:
+- Consistent environment
+- No Python dependency conflicts
+- Same codebase as API
+
+**Launch**: Requires `--profile cli` flag
+**Lifecycle**: Created on `run`, removed on exit (`--rm`)
+
+**Responsibilities**:
+- Interactive terminal interface
+- Same functionality as API (add, query, summarize, etc.)
+- Direct user interaction
+- Session management
+
+**Usage**:
+```bash
+# One-off command (container removed after)
+docker compose --profile cli run --rm docai list
+
+# Interactive session
+docker compose --profile cli run --rm docai chat
+```
+
+---
+
+### Data Flow & Interactions
+
+#### Document Indexing Flow
+```
+┌──────┐
+│ User │ uploads PDF via CLI or API
+└───┬──┘
+    │
+    ▼
+┌─────────────────┐
+│  docai / API    │ Parse PDF, chunk text
+└───┬─────────────┘
+    │ text chunks
+    ▼
+┌─────────────────┐
+│  Ollama (Host)  │ Generate embeddings
+│  172.26.0.1     │ nomic-embed-text model
+└───┬─────────────┘
+    │ vector embeddings
+    ▼
+┌─────────────────┐
+│  ChromaDB       │ Store embeddings + metadata
+│  chromadb:8000  │ Create/update collection
+└─────────────────┘
+```
+
+#### Query Processing Flow
+```
+┌──────┐
+│ User │ asks "What are the main findings?"
+└───┬──┘
+    │
+    ▼
+┌─────────────────┐
+│  docai / API    │ Receive query
+└───┬─────────────┘
+    │ query text
+    ▼
+┌─────────────────┐
+│  Ollama (Host)  │ Embed query
+│  172.26.0.1     │
+└───┬─────────────┘
+    │ query embedding
+    ▼
+┌─────────────────┐
+│  ChromaDB       │ Similarity search
+│  chromadb:8000  │ Return top 5 chunks
+└───┬─────────────┘
+    │ relevant chunks
+    ▼
+┌─────────────────┐
+│  docai / API    │ Assemble context
+└───┬─────────────┘
+    │ prompt + context
+    ▼
+┌─────────────────┐
+│  Ollama (Host)  │ Generate answer
+│  llama3.1:8b    │
+└───┬─────────────┘
+    │ answer text
+    ▼
+┌──────┐
+│ User │ receives response
+└──────┘
+```
+
+---
+
+### Understanding "Tenants" in ChromaDB
+
+#### What is a Tenant?
+A **tenant** is a namespace/boundary for organizing collections in ChromaDB.
+
+**Default tenant**: `default_tenant`
+- All collections created without specifying tenant go here
+- Used for single-user/single-project scenarios
+- DocAI uses only the default tenant
+
+**Multi-tenancy**: In production systems, you might have:
+```
+Tenant: customer_a
+  └── Collection: documents
+  └── Collection: embeddings
+
+Tenant: customer_b
+  └── Collection: documents
+  └── Collection: embeddings
+```
+
+This prevents data leakage between customers.
+
+#### DocAI Tenant Structure
+```
+ChromaDB Server (chromadb:8000)
+  │
+  └── default_tenant (only tenant)
+        │
+        └── docai_documents (collection)
+              │
+              ├── Chunk 1: embedding + metadata
+              ├── Chunk 2: embedding + metadata
+              └── Chunk N: embedding + metadata
+```
+
+**Collection**: `docai_documents` (configurable via env var)
+**Tenant**: `default_tenant` (implicit, not configurable)
+
+#### The Tenant Error (Previously)
+```
+ValueError: Could not connect to tenant default_tenant. Are you sure it exists?
+Exception: {"error":"Unimplemented","message":"The v1 API is deprecated. Please use /v2 apis"}
+```
+
+**What happened**:
+- Old ChromaDB client (0.4.22) used v1 API for tenant validation
+- New ChromaDB server (latest) only supports v2 API
+- v1 endpoint returned 410 Gone error
+- Client couldn't validate tenant existence
+
+**Solution**: Upgrade client to 0.5.23 to use v2 API
+
+---
+
+### Network Address Reference
+
+#### From Inside Containers
+
+| Service | Address | Port | Protocol |
+|---------|---------|------|----------|
+| Ollama | `172.26.0.1` | 11434 | HTTP |
+| ChromaDB | `chromadb` | 8000 | HTTP |
+| API | `docai-api` | 8080 | HTTP |
+
+#### From Host Machine
+
+| Service | Address | Port | Protocol |
+|---------|---------|------|----------|
+| Ollama | `localhost` | 11434 | HTTP |
+| ChromaDB | `localhost` | 8000 | HTTP |
+| API | `localhost` | 8080 | HTTP |
+
+#### From Internet (if firewall allows)
+
+| Service | Address | Port | Exposed? |
+|---------|---------|------|----------|
+| Ollama | N/A | 11434 | ❌ No (host service) |
+| ChromaDB | `<host-ip>` | 8000 | ✅ Yes |
+| API | `<host-ip>` | 8080 | ✅ Yes |
+
+---
+
+### Component Lifecycle
+
+#### Startup Order
+```
+1. docker compose up -d
+   ↓
+2. Network created: docai-network
+   ↓
+3. Volumes created: chroma_data
+   ↓
+4. chromadb starts
+   ↓
+5. chromadb health check passes (30s max)
+   ↓
+6. docai-api starts (depends_on: chromadb healthy)
+   ↓
+7. System ready
+```
+
+**CLI**: Starts only when explicitly invoked with `--profile cli`
+
+#### Shutdown
+```
+docker compose down
+   ↓
+1. Stop docai-api (graceful shutdown)
+   ↓
+2. Stop chromadb (graceful shutdown)
+   ↓
+3. Remove containers
+   ↓
+4. Network remains (unless -v flag)
+   ↓
+5. Volumes remain (data persists)
+```
+
+**Persistent data**: Survives container removal
+**Ephemeral data**: Container filesystems (logs, temp files)
+
+---
+
+### Why This Architecture?
+
+#### Separation of Concerns
+- **Ollama on host**: Compute-heavy, GPU utilization, already configured
+- **ChromaDB in container**: Stateful service, needs isolation
+- **API in container**: Stateless, horizontally scalable
+- **CLI in container**: Consistent user environment
+
+#### Benefits
+✅ **Portability**: Containers work on any Docker host
+✅ **Scalability**: Can run multiple API instances
+✅ **Isolation**: Services don't interfere
+✅ **Versioning**: Pin exact ChromaDB version
+✅ **Development**: Easy to rebuild/test
+
+#### Trade-offs
+⚠️ **Network overhead**: Container-to-host adds ~1-2ms latency
+⚠️ **Complexity**: Multiple moving parts
+⚠️ **Debugging**: Need to inspect multiple containers
+
+---
+
+### Current Configuration Summary
+
+```yaml
+Network: docai-network (bridge, 172.26.0.0/16)
+Gateway: 172.26.0.1
+
+Services:
+  chromadb:
+    - Image: chromadb/chroma:0.5.23
+    - Port: 8000 (published)
+    - Volume: chroma_data:/data
+    - Health: Monitored
+    - Network: docai-network
+
+  docai-api:
+    - Image: llm-dir-docai-api (custom)
+    - Port: 8080 (published)
+    - Volumes: documents, sessions, vector_db
+    - Depends: chromadb (healthy)
+    - Ollama: 172.26.0.1:11434
+    - Network: docai-network
+
+  docai (CLI):
+    - Image: llm-dir-docai (custom)
+    - Profile: cli (manual start)
+    - Ephemeral: --rm flag
+    - Volumes: Same as API
+    - Ollama: 172.26.0.1:11434
+    - Network: docai-network
+
+External:
+  Ollama: localhost:11434 (host process)
+```

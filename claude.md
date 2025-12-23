@@ -22,17 +22,7 @@ Claude can help with:
 - Describe requirements concisely (e.g., "serverless Python API for user auth").
 - Focus on one cloud provider and service per query.
 
-## 3. Automation
-Claude is useful for:
-- **Workflow Automation:** Designing automation flows, integrating different tools, and generating API interaction code.
-- **RPA (Robotic Process Automation):** Developing scripts for repetitive tasks, data entry, and report generation.
-- **Testing:** Creating unit, integration, and end-to-end test cases and scripts.
-
-*Token Optimization for Automation:*
-- Break down complex automation tasks into smaller, sequential prompts.
-- Specify the exact tool/language for the automation script.
-
-## 4. LLM App Building
+## 3. LLM App Building
 Claude can aid in developing applications that utilize Large Language Models:
 - **Prompt Engineering:** Crafting effective prompts for specific tasks (summarization, generation, classification).
 - **Code Generation:** Writing boilerplate code for LLM API calls, data preprocessing, and post-processing.
@@ -43,7 +33,7 @@ Claude can aid in developing applications that utilize Large Language Models:
 - Provide concise examples for prompt engineering.
 - Specify the desired programming language and LLM API.
 
-## 5. Debugging
+## 4. Debugging
 Claude can assist in identifying and resolving issues:
 - **Code Analysis:** Pinpointing potential bugs, logical errors, and suggesting fixes in application code.
 - **Error Interpretation:** Explaining complex error messages and stack traces.
@@ -53,8 +43,9 @@ Claude can assist in identifying and resolving issues:
 - Include the full error message and relevant stack trace.
 - Isolate the problematic code block or function.
 
-## 6. General Token Optimization Strategies
+## 5. General Token Optimization Strategies
 - **Be Specific:** Ask direct questions; avoid vague language.
+- **Don't duplicate printing stuffs, either write a file or disply within terminal:** Ask direct questions; avoid vague language.
 - **Context Management:** Only provide necessary context; avoid rehashing previous information unless crucial.
 - **Iterative Prompting:** Break down complex problems into a series of smaller, related prompts.
 - **Example Snippets:** When asking for code, provide a minimal working example or desired output format.

@@ -4,10 +4,10 @@ langchain-community==0.0.10
 langchain-core==0.1.10
 
 # Ollama integration
-ollama==0.1.6
+ollama>=0.4.5
 
 # Vector store
-chromadb==0.4.22
+chromadb==0.5.23
 sentence-transformers==2.2.2
 
 # Document processing
@@ -28,7 +28,7 @@ python-multipart==0.0.6
 
 # Utilities
 python-dotenv==1.0.0
-pydantic==2.5.3
+pydantic>=2.5.3
 tiktoken==0.5.2
 tqdm==4.66.1
 

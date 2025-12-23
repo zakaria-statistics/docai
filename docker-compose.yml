@@ -1,4 +1,4 @@
-version: '3.8'
+version: "3.8"
 
 services:
   # Ollama LLM Server (DISABLED - Using host Ollama)
@@ -21,19 +21,22 @@ services:
 
   # ChromaDB Vector Database Server
   chromadb:
-    image: chromadb/chroma:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.chromadb
     container_name: docai-chromadb
     ports:
       - "8000:8000"
     volumes:
-      - chroma_data:/chroma/chroma
+      - chroma_data:/data
     environment:
       - IS_PERSISTENT=TRUE
+      - PERSIST_DIRECTORY=/data
       - ANONYMIZED_TELEMETRY=FALSE
     networks:
       - docai-network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/api/v2/heartbeat"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -52,8 +55,9 @@ services:
       - ./data/documents:/app/data/documents
       - ./data/sessions:/app/data/sessions
       - ./test_docs:/app/test_docs:ro
+      - ./data/vector_db:/app/data/vector_db
     environment:
-      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      - OLLAMA_BASE_URL=http://172.26.0.1:11434
       - OLLAMA_CHAT_MODEL=llama3.1:8b
       - OLLAMA_EMBEDDING_MODEL=nomic-embed-text
       - CHROMA_HOST=chromadb
@@ -70,7 +74,7 @@ services:
     tty: true
     restart: unless-stopped
     profiles:
-      - cli  # Only start with: docker-compose --profile cli up
+      - cli # Only start with: docker-compose --profile cli up
 
   # DocAI API Server (HTTP REST API)
   docai-api:
@@ -87,8 +91,9 @@ services:
       - ./data/documents:/app/data/documents
       - ./data/sessions:/app/data/sessions
       - ./test_docs:/app/test_docs:ro
+      - ./data/vector_db:/app/data/vector_db
     environment:
-      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      - OLLAMA_BASE_URL=http://172.26.0.1:11434
       - OLLAMA_CHAT_MODEL=llama3.1:8b
       - OLLAMA_EMBEDDING_MODEL=nomic-embed-text
       - CHROMA_HOST=chromadb
@@ -101,6 +106,7 @@ services:
       - docai-network
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    entrypoint: []
     command: ["uvicorn", "src.api:app", "--host", "0.0.0.0", "--port", "8080"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
